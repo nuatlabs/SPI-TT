@@ -39,6 +39,38 @@ CTRL_IRQ_EN_MASK    = 0x40
 CTRL_START_MASK     = 0x80
 
 
+# ==============================================================================
+# Signal Bit Helper Functions (Avoids "Packed objects cannot be indexed" error)
+# ==============================================================================
+def uo_bit(dut, bit: int) -> int:
+    """Safely extract single bit integer value from uo_out packed array."""
+    return (int(dut.uo_out.value) >> bit) & 1
+
+def spi_sclk(dut) -> int:
+    return uo_bit(dut, 0)
+
+def spi_mosi(dut) -> int:
+    return uo_bit(dut, 1)
+
+def spi_cs0(dut) -> int:
+    return uo_bit(dut, 2)
+
+def spi_busy(dut) -> int:
+    return uo_bit(dut, 3)
+
+def spi_done(dut) -> int:
+    return uo_bit(dut, 4)
+
+def spi_rx_ready(dut) -> int:
+    return uo_bit(dut, 5)
+
+def spi_cs1(dut) -> int:
+    return uo_bit(dut, 6)
+
+def spi_irq(dut) -> int:
+    return uo_bit(dut, 7)
+
+
 class HostBusDriver:
     """Nuat Labs 8-bit Host Bus Driver for SPI Controller verification."""
 
@@ -73,9 +105,9 @@ class HostBusDriver:
         await FallingEdge(self.dut.clk)
         ui_val = (0 << 1) | (0 << 2) | ((addr & 0x07) << 3)
         self.dut.ui_in.value = ui_val
-        await Timer(1, unit="ns")
+        await Timer(1, "ns")
         # Check that output enable is active
-        assert self.dut.uio_oe.value == 0xFF, f"Expected uio_oe=0xFF, got {self.dut.uio_oe.value}"
+        assert int(self.dut.uio_oe.value) == 0xFF, f"Expected uio_oe=0xFF, got {self.dut.uio_oe.value}"
         read_val = int(self.dut.uio_out.value)
         await RisingEdge(self.dut.clk)
         await FallingEdge(self.dut.clk)
@@ -84,13 +116,15 @@ class HostBusDriver:
 
     async def wait_done(self, timeout_cycles=1000):
         """Wait for SPI transfer completion."""
+        # Wait for busy to assert
         for _ in range(30):
             await RisingEdge(self.dut.clk)
-            if self.dut.uo_out[3].value == 1:
+            if spi_busy(self.dut) == 1:
                 break
+        # Wait for busy to deassert
         for _ in range(timeout_cycles):
             await RisingEdge(self.dut.clk)
-            if self.dut.uo_out[3].value == 0:
+            if spi_busy(self.dut) == 0:
                 await RisingEdge(self.dut.clk)
                 return
         raise TimeoutError("SPI transfer timed out waiting for completion")
@@ -114,13 +148,12 @@ async def simulate_spi_slave(dut, cpol: int, cpha: int, word_len: int, tx_slave_
 
     bit_count = 0
 
-    # Wait for CS to assert (active low)
-    while dut.uo_out[2].value == 1 and dut.uo_out[6].value == 1:
+    # Wait for CS to assert (active low on either CS0 or CS1)
+    while spi_cs0(dut) == 1 and spi_cs1(dut) == 1:
         await RisingEdge(dut.clk)
 
     # Initial MISO drive for CPHA=0
     if cpha == 0 and bit_count < word_len:
-        # Drive first slave bit during CS assertion
         cur_ui = int(dut.ui_in.value)
         dut.ui_in.value = (cur_ui & ~1) | slave_bits[0]
 
@@ -128,7 +161,7 @@ async def simulate_spi_slave(dut, cpol: int, cpha: int, word_len: int, tx_slave_
 
     while bit_count < word_len:
         await RisingEdge(dut.clk)
-        curr_sclk = int(dut.uo_out[0].value)
+        curr_sclk = spi_sclk(dut)
 
         # Detect SCLK edge
         if last_sclk != curr_sclk:
@@ -138,7 +171,7 @@ async def simulate_spi_slave(dut, cpol: int, cpha: int, word_len: int, tx_slave_
             if cpha == 0:
                 # CPHA=0: Leading edge is sample edge for both Master and Slave
                 if is_leading_edge:
-                    mosi_bit = int(dut.uo_out[1].value)
+                    mosi_bit = spi_mosi(dut)
                     received_mosi_bits.append(mosi_bit)
                     bit_count += 1
                 elif is_trailing_edge:
@@ -153,7 +186,7 @@ async def simulate_spi_slave(dut, cpol: int, cpha: int, word_len: int, tx_slave_
                         cur_ui = int(dut.ui_in.value)
                         dut.ui_in.value = (cur_ui & ~1) | slave_bits[bit_count]
                 elif is_trailing_edge:
-                    mosi_bit = int(dut.uo_out[1].value)
+                    mosi_bit = spi_mosi(dut)
                     received_mosi_bits.append(mosi_bit)
                     bit_count += 1
 
@@ -174,18 +207,18 @@ async def simulate_spi_slave(dut, cpol: int, cpha: int, word_len: int, tx_slave_
 async def test_nuatlabs_reset_and_regs(dut):
     """Verify reset state, default register values, and register read/write integrity."""
     dut._log.info("Nuat Labs: Testing reset and register read/write")
-    clock = Clock(dut.clk, 20, unit="ns")  # 50 MHz clock
+    clock = Clock(dut.clk, 20, "ns")  # 50 MHz clock
     cocotb.start_soon(clock.start())
 
     driver = HostBusDriver(dut)
     await driver.reset()
 
     # Verify default outputs after reset
-    assert dut.uo_out[0].value == 0, "Default SCLK must idle low (CPOL=0)"
-    assert dut.uo_out[1].value == 0, "Default MOSI must be 0"
-    assert dut.uo_out[2].value == 1, "Default CS0_n must be inactive (high)"
-    assert dut.uo_out[3].value == 0, "Default busy flag must be low"
-    assert dut.uo_out[4].value == 0, "Default done strobe must be low"
+    assert spi_sclk(dut) == 0, "Default SCLK must idle low (CPOL=0)"
+    assert spi_mosi(dut) == 0, "Default MOSI must be 0"
+    assert spi_cs0(dut) == 1, "Default CS0_n must be inactive (high)"
+    assert spi_busy(dut) == 0, "Default busy flag must be low"
+    assert spi_done(dut) == 0, "Default done strobe must be low"
 
     # Verify default register reads
     clkdiv_val = await driver.read_reg(ADDR_CLKDIV)
@@ -220,7 +253,7 @@ async def test_nuatlabs_spi_modes(dut):
     Mode 3: CPOL=1, CPHA=1
     """
     dut._log.info("Nuat Labs: Testing SPI Modes 0, 1, 2, and 3")
-    clock = Clock(dut.clk, 20, unit="ns")
+    clock = Clock(dut.clk, 20, "ns")
     cocotb.start_soon(clock.start())
     driver = HostBusDriver(dut)
 
@@ -278,7 +311,7 @@ async def test_nuatlabs_configurable_word_lengths(dut):
     Tests 4-bit, 8-bit, 12-bit, and 16-bit word transfers.
     """
     dut._log.info("Nuat Labs: Testing Configurable Word Lengths (4, 8, 12, 16 bits)")
-    clock = Clock(dut.clk, 20, unit="ns")
+    clock = Clock(dut.clk, 20, "ns")
     cocotb.start_soon(clock.start())
     driver = HostBusDriver(dut)
 
@@ -327,7 +360,7 @@ async def test_nuatlabs_internal_loopback(dut):
     Internal MOSI is looped back to MISO.
     """
     dut._log.info("Nuat Labs: Testing Internal Loopback Mode (BIST)")
-    clock = Clock(dut.clk, 20, unit="ns")
+    clock = Clock(dut.clk, 20, "ns")
     cocotb.start_soon(clock.start())
     driver = HostBusDriver(dut)
     await driver.reset()
@@ -364,7 +397,7 @@ async def test_nuatlabs_dual_slave_select(dut):
     CS0 is asserted when slave_sel=0, CS1 is asserted when slave_sel=1.
     """
     dut._log.info("Nuat Labs: Testing Dual Slave Select (CS0 and CS1)")
-    clock = Clock(dut.clk, 20, unit="ns")
+    clock = Clock(dut.clk, 20, "ns")
     cocotb.start_soon(clock.start())
     driver = HostBusDriver(dut)
     await driver.reset()
@@ -377,8 +410,8 @@ async def test_nuatlabs_dual_slave_select(dut):
 
     # During transfer, CS0 must be low and CS1 must be high
     await ClockCycles(dut.clk, 3)
-    assert dut.uo_out[2].value == 0, "CS0_n must be active low when slave 0 selected"
-    assert dut.uo_out[6].value == 1, "CS1_n must remain inactive high when slave 0 selected"
+    assert spi_cs0(dut) == 0, "CS0_n must be active low when slave 0 selected"
+    assert spi_cs1(dut) == 1, "CS1_n must remain inactive high when slave 0 selected"
     await driver.wait_done()
 
     # Test Slave 1 selection
@@ -387,8 +420,8 @@ async def test_nuatlabs_dual_slave_select(dut):
     await driver.write_reg(ADDR_CTRL, CTRL_AUTO_CS_MASK | CTRL_LOOPBACK_MASK | CTRL_START_MASK)
 
     await ClockCycles(dut.clk, 3)
-    assert dut.uo_out[2].value == 1, "CS0_n must remain inactive high when slave 1 selected"
-    assert dut.uo_out[6].value == 0, "CS1_n must be active low when slave 1 selected"
+    assert spi_cs0(dut) == 1, "CS0_n must remain inactive high when slave 1 selected"
+    assert spi_cs1(dut) == 0, "CS1_n must be active low when slave 1 selected"
     await driver.wait_done()
 
     dut._log.info("Nuat Labs: Dual Slave Select verified!")
@@ -401,7 +434,7 @@ async def test_nuatlabs_direct_hardware_start(dut):
     Allows triggering SPI transactions with a single hardware pin pulse.
     """
     dut._log.info("Nuat Labs: Testing Direct Hardware Start Trigger (ui_in[6])")
-    clock = Clock(dut.clk, 20, unit="ns")
+    clock = Clock(dut.clk, 20, "ns")
     cocotb.start_soon(clock.start())
     driver = HostBusDriver(dut)
     await driver.reset()
@@ -413,18 +446,14 @@ async def test_nuatlabs_direct_hardware_start(dut):
     # Pulse direct_start (ui_in[6])
     await FallingEdge(dut.clk)
     dut.ui_in.value = 0x02 | (1 << 6)
-    dut._log.info(f"ui_in set to: {dut.ui_in.value}, direct_start={dut.user_project.direct_start.value}")
     await RisingEdge(dut.clk)
-    dut._log.info(f"After 1 cycle: direct_start={dut.user_project.direct_start.value}, busy={dut.uo_out[3].value}")
     await FallingEdge(dut.clk)
     dut.ui_in.value = 0x02
     await RisingEdge(dut.clk)
-    dut._log.info(f"After release: busy={dut.uo_out[3].value}")
 
     await driver.wait_done()
 
     rx_val = await driver.read_reg(ADDR_RX_DATA_L)
-    dut._log.info(f"rx_val read: {rx_val}")
     assert rx_val == test_byte, f"Direct start mismatch: Expected 0x{test_byte:02X}, got 0x{rx_val:02X}"
 
     dut._log.info("Nuat Labs: Direct hardware trigger verified!")
