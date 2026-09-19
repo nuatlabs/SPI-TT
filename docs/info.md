@@ -36,7 +36,7 @@ The controller converts parallel host data into high-speed serial bitstreams (MO
 2. **Clock Generation (Baud Rate Prescaler)**:
    - SCLK is derived from the system clock (`clk`) via an 8-bit prescaler register (`REG_CLKDIV`).
    - SCLK half-period duration = `(REG_CLKDIV + 1)` system clock cycles.
-   - Frequency formula: $f_{\text{SCLK}} = \frac{f_{\text{CLK}}}{2 \times (\text{REG\_CLKDIV} + 1)}$.
+   - Frequency formula: $f_{\text{SCLK}} = \frac{f_{\text{CLK}}}{2 \times (\text{divider} + 1)}$, where `divider` is the value in `REG_CLKDIV`.
 3. **SPI Modes (CPOL / CPHA 0–3)**:
    - **Mode 0 (CPOL=0, CPHA=0)**: SCLK idles LOW; data sampled on rising edge, shifted on falling edge.
    - **Mode 1 (CPOL=0, CPHA=1)**: SCLK idles LOW; data shifted on rising edge, sampled on falling edge.

@@ -22,7 +22,8 @@ The Nuat Labs SPI Controller is designed for high-reliability embedded and mixed
   - Supports both **MSB-first** and **LSB-first** bit ordering.
 - **Clock Generation & Prescaler**:
   - Flexible baud rate generation with programmable divider `REG_CLKDIV`:
-    $$f_{\text{SCLK}} = \frac{f_{\text{CLK}}}{2 \times (\text{REG\_CLKDIV} + 1)}$$
+    $$f_{\text{SCLK}} = \frac{f_{\text{CLK}}}{2 \times (\text{divider} + 1)}$$
+    *(where `divider` is the 8-bit value in `REG_CLKDIV`)*
 - **Chip Select Management**:
   - Dual slave device support (`spi_cs0_n` and `spi_cs1_n`).
   - Automatic hardware guard times (lead time and trail time).
@@ -95,10 +96,3 @@ Comprehensive cocotb test suite in `test/test.py` validates all SPI modes, varia
 ```
 ** TESTS=6 PASS=6 FAIL=0 SKIP=0 **
 ```
-
----
-
-## License & Copyright
-
-Copyright (c) 2024-2026 Nuat Labs.
-Licensed under the Apache License, Version 2.0.
